@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flickr Signage Slideshow — Last 7 Days</title>
+  <meta name="description" content="Auto-updating Flickr slideshow for digital signage. Shows multiple photos per slide, actual size, techy animations." />
+  <style>
+    :root {
+      --bg: #000;
+      --fg: #eafcff;
+      --accent: #00e5ff;
+      --accent-2: #7cf9ff;
+      --gap: 16px;
+      --slide-duration: 12s;
+      --row-target: 320px; /* target row height for justified layout */
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      overflow: hidden;
+    }
+    /* Techy animated grid background */
+    .bg-tech {
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(0,229,255,0.08), transparent 40%),
+        radial-gradient(circle at 0% 100%, rgba(0,229,255,0.06), transparent 40%),
+        linear-gradient(90deg, rgba(0,229,255,0.05) 1px, transparent 1px) 0 0 / 40px 40px,
+        linear-gradient(0deg, rgba(0,229,255,0.05) 1px, transparent 1px) 0 0 / 40px 40px,
+        radial-gradient(circle at 100% 50%, rgba(124,249,255,0.06), transparent 35%);
+      pointer-events: none;
+      filter: saturate(120%);
+      animation: bgFloat 18s ease-in-out infinite alternate;
+    }
+    @keyframes bgFloat {
+      0% { transform: translateY(-1%) scale(1.02); opacity: 0.9; }
+      100% { transform: translateY(1%) scale(1.05); opacity: 1; }
+    }
+
+    /* Subtle scanline overlay */
+    .scanlines {
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(0,0,0,0.12),
+        rgba(0,0,0,0.12) 1px,
+        transparent 2px,
+        transparent 4px
+      );
+      mix-blend-mode: multiply;
+      pointer-events: none;
+      opacity: 0.35;
+      animation: flicker 6s linear infinite;
+    }
+    @keyframes flicker {
+      0%, 100% { opacity: 0.35; }
+      40% { opacity: 0.28; }
+      50% { opacity: 0.4; }
+      60% { opacity: 0.3; }
+    }
+
+    /* Controls */
+    .controls {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 8px;
+      z-index: 30;
+    }
+    .btn {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(124,249,255,0.25);
+      color: var(--fg);
+      padding: 8px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+      text-shadow: 0 0 6px rgba(0,229,255,0.6);
+    }
+    .btn:hover { background: rgba(255,255,255,0.12); }
+    .badge {
+      border: 1px solid rgba(124,249,255,0.25);
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      line-height: 1;
+      backdrop-filter: blur(4px);
+      background: rgba(255,255,255,0.04);
+    }
+
+    /* Slide container */
+    .stage {
+      position: fixed;
+      inset: 0;
+      padding: 24px;
+      display: grid;
+      place-items: center;
+    }
+    .slide {
+      position: absolute;
+      inset: 24px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: center;
+      gap: var(--gap);
+      opacity: 0;
+      transform: perspective(1200px) rotateY(-8deg) scale(0.985) translateY(10px);
+      transition: opacity 900ms ease, transform 900ms ease;
+    }
+    .slide.active {
+      opacity: 1;
+      transform: perspective(1200px) rotateY(0deg) scale(1) translateY(0);
+    }
+
+    /* Each row wrapper (for justified rows) */
+    .row {
+      width: 100%;
+      display: flex;
+      gap: var(--gap);
+      justify-content: center; /* center the row in case of underflow due to no-upscale rule */
+    }
+
+    /* Photo tile */
+    .tile {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #0a0f12;
+      border: 1px solid rgba(124,249,255,0.22);
+      box-shadow:
+        0 0 0 1px rgba(124,249,255,0.22) inset,
+        0 8px 30px rgba(0,229,255,0.12),
+        0 0 18px rgba(0,229,255,0.18);
+      isolation: isolate;
+    }
+    .tile img {
+      display: block;
+      width: 100%;
+      height: auto;
+      vertical-align: middle;
+      transform: translateZ(0);
+      backface-visibility: hidden;
+    }
+    /* Neon sweep overlay */
+    .tile::after {
+      content: "";
+      position: absolute;
+      inset: -120% -120%;
+      background: conic-gradient(from 0deg, rgba(124,249,255,0), rgba(124,249,255,0.15), rgba(124,249,255,0));
+      animation: sweep 8s linear infinite;
+      mix-blend-mode: overlay;
+      pointer-events: none;
+    }
+    @keyframes sweep {
+      to { transform: rotate(360deg); }
+    }
+    /* Stagger reveal */
+    .tile.reveal {
+      opacity: 0;
+      transform: translateY(24px) scale(0.98);
+      animation: popin 700ms ease forwards;
+    }
+    @keyframes popin {
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .footer {
+      position: fixed;
+      left: 14px;
+      bottom: 10px;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      opacity: 0.65;
+      z-index: 10;
+      padding: 6px 10px;
+      border: 1px solid rgba(124,249,255,0.25);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.04);
+      backdrop-filter: blur(4px);
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-tech"></div>
+  <div class="scanlines"></div>
+
+  <div class="controls">
+    <button id="btnReload" class="btn">Reload</button>
+    <button id="btnFullscreen" class="btn">Fullscreen</button>
+    <span id="status" class="badge">Loading…</span>
+  </div>
+
+  <div class="stage" id="stage"></div>
+
+  <div class="footer" id="footer"></div>
+
+  <script>
+    const CONFIG = {
+      apiKey: "4855498d62dbadaf2bd11df6fcdb9f08",
+      username: "sulamitachurchpdx",
+      // layout
+      targetRowHeight: parseInt(getParam('rowHeight', 320), 10),
+      gap: parseInt(getParam('gap', 16), 10),
+      // timing
+      slideDurationMs: parseInt(getParam('duration', 12000), 10),
+      refreshMs: parseInt(getParam('refresh', 300000), 10), // 5 min
+      // content
+      tags: getParam('tags', ''), // comma-separated
+      shuffle: getParam('shuffle', 'false') === 'true' ? true : false,
+    };
+
+    function getParam(name, def) {
+      const u = new URL(location.href);
+      const v = u.searchParams.get(name);
+      return v === null ? def : v;
+    }
+
+    const daySec = 24 * 60 * 60;
+    const sevenDaysAgo = () => Math.floor(Date.now() / 1000) - 7 * daySec;
+
+    const stage = document.getElementById('stage');
+    const footer = document.getElementById('footer');
+    const statusEl = document.getElementById('status');
+    const btnFS = document.getElementById('btnFullscreen');
+    const btnReload = document.getElementById('btnReload');
+
+    btnReload.addEventListener('click', () => loadAndRender().catch(console.error));
+    btnFS.addEventListener('click', () => {
+      const el = document.documentElement;
+      if (!document.fullscreenElement) el.requestFullscreen?.();
+      else document.exitFullscreen?.();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'f') btnFS.click();
+      if (e.key.toLowerCase() === 'r') btnReload.click();
+    });
+
+    let slides = [];
+    let slideIndex = 0;
+    let slideTimer = null;
+    let refreshTimer = null;
+
+    async function flickrFindNSID(apiKey, username) {
+      const url = new URL('https://www.flickr.com/services/rest/');
+      url.searchParams.set('method', 'flickr.people.findByUsername');
+      url.searchParams.set('api_key', apiKey);
+      url.searchParams.set('username', username);
+      url.searchParams.set('format', 'json');
+      url.searchParams.set('nojsoncallback', '1');
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('Failed to resolve username');
+      const data = await r.json();
+      if (data?.stat !== 'ok') throw new Error(data?.message || 'Flickr error');
+      return data.user.nsid;
+    }
+
+    async function flickrFetchRecent(apiKey, userId, tags) {
+      const url = new URL('https://www.flickr.com/services/rest/');
+      url.searchParams.set('method', 'flickr.photos.search');
+      url.searchParams.set('api_key', apiKey);
+      url.searchParams.set('user_id', userId);
+      url.searchParams.set('min_upload_date', String(sevenDaysAgo()));
+      url.searchParams.set('extras', [
+        'url_m','url_l','url_o',
+        'width_m','height_m','width_l','height_l',
+        'o_dims','date_upload','owner_name'
+      ].join(','));
+      url.searchParams.set('per_page', '250');
+      url.searchParams.set('page', '1');
+      url.searchParams.set('format', 'json');
+      url.searchParams.set('nojsoncallback', '1');
+      if (tags) url.searchParams.set('tags', tags);
+
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('Failed to fetch photos');
+      const data = await r.json();
+      if (data?.stat !== 'ok') throw new Error(data?.message || 'Flickr error');
+      return data.photos.photo;
+    }
+
+    function bestImage(p) {
+      // Prefer large, then medium; include natural sizes
+      let url = p.url_l || p.url_m || p.url_o || null;
+      let w = p.width_l || p.width_m || p.width_o || null;
+      let h = p.height_l || p.height_m || p.height_o || null;
+      return url ? { url, w: Number(w), h: Number(h), title: p.title || '' } : null;
+    }
+
+    function shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    function buildJustifiedRows(items, containerWidth, targetRowHeight, gap, maxScaleUp=1.0) {
+      // items: [{url,w,h,title}]
+      const rows = [];
+      let row = [];
+      let rowAspectSum = 0;
+
+      for (const it of items) {
+        const ar = it.w && it.h ? it.w / it.h : 1.5; // fallback
+        row.push({...it, ar});
+        rowAspectSum += ar;
+
+        const gaps = gap * (row.length - 1);
+        const rowWidthAtTarget = rowAspectSum * targetRowHeight + gaps;
+
+        if (rowWidthAtTarget >= containerWidth || row.length >= 6) {
+          // compute row height to exactly fit container width
+          let rowH = (containerWidth - gaps) / rowAspectSum;
+          // Clamp to avoid upscaling beyond natural size
+          let maxNoUpscaleH = Infinity;
+          for (const r of row) {
+            if (r.w && r.h) {
+              const naturalH = r.h; // at 1:1 scale
+              maxNoUpscaleH = Math.min(maxNoUpscaleH, naturalH);
+            }
+          }
+          // Convert naturalH in pixels to onscreen height depends on device pixel ratio;
+          // we approximate by not allowing > targetRowHeight * maxScaleUp
+          const noUpscaleClamp = Math.min(targetRowHeight * maxScaleUp, maxNoUpscaleH || rowH);
+          rowH = Math.min(rowH, noUpscaleClamp, targetRowHeight); // keep rows tidy
+
+          rows.push({h: Math.max(80, rowH), items: row});
+          row = [];
+          rowAspectSum = 0;
+        }
+      }
+      if (row.length) {
+        // last row: use the computed target (no stretch to full width)
+        rows.push({h: Math.min(targetRowHeight, Math.max(80, (containerWidth - gap * (row.length - 1)) / (rowAspectSum || 1))), items: row});
+      }
+      return rows;
+    }
+
+    function paginateRowsToSlides(rows, containerHeight, gap) {
+      const slides = [];
+      let current = [];
+      let used = 0;
+      for (const r of rows) {
+        const rowHeightWithGap = (current.length ? gap : 0) + r.h;
+        if (used + rowHeightWithGap > containerHeight && current.length) {
+          slides.push(current);
+          current = [r];
+          used = r.h;
+        } else {
+          current.push(r);
+          used += rowHeightWithGap;
+        }
+      }
+      if (current.length) slides.push(current);
+      return slides;
+    }
+
+    function renderSlides(slides) {
+      stage.innerHTML = '';
+      const gap = CONFIG.gap;
+      slides.forEach((rows, i) => {
+        const slide = document.createElement('div');
+        slide.className = 'slide';
+        slide.style.setProperty('--gap', gap + 'px');
+
+        rows.forEach((r, rowIdx) => {
+          const rowEl = document.createElement('div');
+          rowEl.className = 'row';
+          rowEl.style.marginTop = rowIdx === 0 ? '0' : gap + 'px';
+          // Calculate each tile width from row height and aspect ratio
+          r.items.forEach((it, j) => {
+            const tile = document.createElement('div');
+            tile.className = 'tile reveal';
+            tile.style.height = r.h + 'px';
+            const width = it.ar * r.h;
+            tile.style.width = width + 'px';
+            tile.style.animationDelay = (j * 90) + 'ms';
+
+            const img = document.createElement('img');
+            img.src = it.url;
+            img.alt = it.title || 'Flickr photo';
+            img.decoding = 'async';
+            img.loading = 'eager';
+            tile.appendChild(img);
+            rowEl.appendChild(tile);
+          });
+          slide.appendChild(rowEl);
+        });
+
+        stage.appendChild(slide);
+      });
+    }
+
+    function showSlide(i) {
+      const all = Array.from(stage.children);
+      all.forEach((el, idx) => {
+        el.classList.toggle('active', idx === i);
+      });
+      document.getElementById('status').textContent = `Slide ${i+1}/${all.length}`;
+    }
+
+    async function loadAndRender() {
+      try {
+        statusEl.textContent = 'Loading…';
+        const userId = await flickrFindNSID(CONFIG.apiKey, CONFIG.username);
+        let photos = await flickrFetchRecent(CONFIG.apiKey, userId, CONFIG.tags);
+        // Sort newest first
+        photos.sort((a,b) => Number(b.dateupload || 0) - Number(a.dateupload || 0));
+        photos = photos.map(bestImage).filter(Boolean);
+        if (CONFIG.shuffle) shuffle(photos);
+
+        // If some items missing dims, attempt to probe via Image() (async, best-effort)
+        const probes = photos.slice(0, 40).map((p) => new Promise((resolve) => {
+          if (p.w && p.h) return resolve(p);
+          const img = new Image();
+          img.onload = () => { p.w = img.naturalWidth; p.h = img.naturalHeight; resolve(p); };
+          img.onerror = () => resolve(p);
+          img.src = p.url;
+        }));
+        await Promise.allSettled(probes);
+
+        const containerWidth = stage.clientWidth - 48; // safe padding
+        const containerHeight = stage.clientHeight - 48;
+        const rows = buildJustifiedRows(photos, containerWidth, CONFIG.targetRowHeight, CONFIG.gap, 1.0);
+        const slidesRows = paginateRowsToSlides(rows, containerHeight, CONFIG.gap);
+
+        slides = slidesRows;
+        renderSlides(slides);
+        slideIndex = 0;
+        showSlide(slideIndex);
+
+        footer.textContent = `sulamitachurchpdx • ${photos.length} photos • last 7 days`;
+        statusEl.textContent = `Slide 1/${slides.length}`;
+
+        // timers
+        if (slideTimer) clearInterval(slideTimer);
+        slideTimer = setInterval(() => {
+          slideIndex = (slideIndex + 1) % slides.length;
+          showSlide(slideIndex);
+        }, CONFIG.slideDurationMs);
+
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = setInterval(() => loadAndRender().catch(console.error), CONFIG.refreshMs);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Error';
+        alert(err.message || String(err));
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      // Re-layout quickly on resize using current images
+      if (!stage.children.length) return;
+      loadAndRender().catch(console.error);
+    });
+
+    // Kick off
+    loadAndRender().catch(console.error);
+  </script>
+</body>
+</html>
